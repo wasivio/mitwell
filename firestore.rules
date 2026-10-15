@@ -1,0 +1,22 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    
+    function isAdmin() {
+      return request.auth != null && 
+        (request.auth.token.email == 'wasim_372@mitwelltech.com' ||
+         request.auth.token.email.matches('.*wasim_372.*') ||
+         request.auth.token.admin == true);
+    }
+
+    // Public users can verify certificates; Only authorized admin can add, edit, or delete
+    match /certificates/{certificateId} {
+      allow read: if true;
+      allow create, update, delete: if isAdmin();
+    }
+
+    match /admins/{adminId} {
+      allow read, write: if isAdmin();
+    }
+  }
+}
