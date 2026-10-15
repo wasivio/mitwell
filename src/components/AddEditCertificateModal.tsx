@@ -127,16 +127,23 @@ export const AddEditCertificateModal: React.FC<AddEditCertificateModalProps> = (
 
     setSaving(true);
     try {
-      // Validate duplicate roll number
-      const isDuplicate = await checkDuplicateRollNumber(
-        cleanRoll,
-        certificateToEdit ? certificateToEdit.id : undefined
-      );
+      // Validate duplicate roll number only if roll number is new or changed
+      const isRollChanged =
+        !certificateToEdit ||
+        cleanRoll !== certificateToEdit.rollNumber.trim().toUpperCase();
 
-      if (isDuplicate) {
-        setError(`A certificate with Roll Number "${cleanRoll}" already exists. Duplicate roll numbers are not permitted.`);
-        setSaving(false);
-        return;
+      if (isRollChanged) {
+        const isDuplicate = await checkDuplicateRollNumber(
+          cleanRoll,
+          certificateToEdit?.id,
+          certificateToEdit?.rollNumber
+        );
+
+        if (isDuplicate) {
+          setError(`A certificate with Roll Number "${cleanRoll}" already exists. Duplicate roll numbers are not permitted.`);
+          setSaving(false);
+          return;
+        }
       }
 
       await onSave({

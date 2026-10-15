@@ -91,29 +91,49 @@ export const AdminDashboardPage: React.FC = () => {
   const handleSaveCertificate = async (
     certData: Omit<Certificate, 'id' | 'createdAt' | 'updatedAt'>
   ) => {
-    if (certificateToEdit && certificateToEdit.id) {
-      const updated = await updateCertificate(certificateToEdit.id, certData);
-      setCertificates((prev) =>
-        prev.map((c) => (c.id === updated.id ? updated : c))
-      );
-      showToast(`Updated certificate for ${updated.studentName} successfully.`);
-      setIsAddEditOpen(false);
-      setCertificateToEdit(null);
-    } else {
-      const created = await addCertificate(certData);
-      setCertificates((prev) => [created, ...prev]);
-      showToast(`Issued certificate for ${created.studentName} successfully.`);
-      setIsAddEditOpen(false);
-      // Immediately display the generated QR code modal
-      setQrModalCert(created);
-      setIsNewQr(true);
+    try {
+      if (certificateToEdit) {
+        const targetId = certificateToEdit.id || certificateToEdit.rollNumber;
+        const updated = await updateCertificate(targetId, certData);
+        setCertificates((prev) =>
+          prev.map((c) =>
+            (c.id && updated.id && c.id === updated.id) ||
+            c.rollNumber.trim().toUpperCase() === updated.rollNumber.trim().toUpperCase()
+              ? updated
+              : c
+          )
+        );
+        showToast(`Updated certificate for ${updated.studentName} successfully.`);
+        setIsAddEditOpen(false);
+        setCertificateToEdit(null);
+      } else {
+        const created = await addCertificate(certData);
+        setCertificates((prev) => [
+          created,
+          ...prev.filter(
+            (c) =>
+              c.rollNumber.trim().toUpperCase() !== created.rollNumber.trim().toUpperCase()
+          ),
+        ]);
+        showToast(`Issued certificate for ${created.studentName} successfully.`);
+        setIsAddEditOpen(false);
+        // Immediately display the generated QR code modal
+        setQrModalCert(created);
+        setIsNewQr(true);
+      }
+    } catch (err: any) {
+      console.error('Error saving certificate:', err);
+      alert(err.message || 'Failed to save certificate');
     }
   };
 
   const handleDelete = async (id: string) => {
     try {
-      await deleteCertificate(id);
-      setCertificates((prev) => prev.filter((c) => c.id !== id));
+      const certToDelete = certificates.find((c) => c.id === id || c.rollNumber === id);
+      await deleteCertificate(id, certToDelete?.rollNumber);
+      setCertificates((prev) =>
+        prev.filter((c) => c.id !== id && c.rollNumber !== id && (!certToDelete || c.rollNumber !== certToDelete.rollNumber))
+      );
       setDeleteConfirmId(null);
       showToast('Certificate removed from system.');
     } catch (err: any) {
@@ -126,11 +146,17 @@ export const AdminDashboardPage: React.FC = () => {
     newStatus: CertificateStatus,
     reason?: string
   ) => {
-    if (!cert.id) return;
+    const targetId = cert.id || cert.rollNumber;
+    if (!targetId) return;
     try {
-      const updated = await updateCertificateStatus(cert.id, newStatus, reason);
+      const updated = await updateCertificateStatus(targetId, newStatus, reason);
       setCertificates((prev) =>
-        prev.map((c) => (c.id === updated.id ? updated : c))
+        prev.map((c) =>
+          (c.id && updated.id && c.id === updated.id) ||
+          c.rollNumber.trim().toUpperCase() === updated.rollNumber.trim().toUpperCase()
+            ? updated
+            : c
+        )
       );
       showToast(`Status changed to ${newStatus.toUpperCase()}`);
     } catch (err: any) {
