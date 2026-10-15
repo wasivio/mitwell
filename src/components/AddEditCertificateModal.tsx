@@ -155,9 +155,9 @@ export const AddEditCertificateModal: React.FC<AddEditCertificateModalProps> = (
         grade: grade.trim().toUpperCase(),
         photoUrl: photoUrl.trim() || 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=crop&w=400&q=80',
         status,
-        revocationReason: status === 'revoked' ? revocationReason.trim() : undefined,
+        revocationReason: status === 'revoked' ? (revocationReason.trim() || 'Certificate revoked by institute.') : '',
         issueDate: issueDate || new Date().toISOString().split('T')[0],
-        expiryDate: status === 'expired' ? expiryDate : undefined,
+        expiryDate: status === 'expired' ? (expiryDate || '') : '',
         certificateNumber: certificateNumber.trim() || `MIT/${session.trim()}/${cleanRoll}`,
         courseDuration: courseDuration.trim(),
       });

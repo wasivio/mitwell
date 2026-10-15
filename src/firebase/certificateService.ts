@@ -16,6 +16,26 @@ import { INITIAL_CERTIFICATES } from '../data/mockCertificates';
 const CERT_STORAGE_KEY = 'mit_welltech_certificates_cache';
 const COLLECTION_NAME = 'certificates';
 
+/**
+ * Strips all keys with undefined values recursively.
+ * Cloud Firestore strictly forbids `undefined` and throws:
+ * "Unsupported field value: undefined"
+ */
+export const sanitizeForFirestore = <T extends Record<string, any>>(obj: T): Record<string, any> => {
+  const clean: Record<string, any> = {};
+  for (const [key, val] of Object.entries(obj)) {
+    if (val === undefined) {
+      continue;
+    }
+    if (val !== null && typeof val === 'object' && !Array.isArray(val) && !(val instanceof Date)) {
+      clean[key] = sanitizeForFirestore(val);
+    } else {
+      clean[key] = val;
+    }
+  }
+  return clean;
+};
+
 // Helper to get local storage certificates
 export const getLocalCertificates = (): Certificate[] => {
   const stored = localStorage.getItem(CERT_STORAGE_KEY);
@@ -209,15 +229,13 @@ export const addCertificate = async (
     try {
       await ensureAdminAuth();
       const docRef = doc(db, COLLECTION_NAME, cleanId);
-      await setDoc(
-        docRef,
-        {
-          ...newCert,
-          rollNumberNormalized: normalizedRoll,
-          timestamp: serverTimestamp(),
-        },
-        { merge: true }
-      );
+      const firestorePayload = sanitizeForFirestore({
+        ...newCert,
+        rollNumberNormalized: normalizedRoll,
+      });
+      firestorePayload.timestamp = serverTimestamp();
+
+      await setDoc(docRef, firestorePayload, { merge: true });
       console.log('Successfully written to Firestore:', cleanId);
     } catch (err: any) {
       console.error('Firestore write error in addCertificate:', err);
@@ -254,6 +272,8 @@ export const updateCertificate = async (
 
   const targetId = id || (normalizedRoll ? `cert-${normalizedRoll.replace(/[^a-zA-Z0-9_-]/g, '_')}` : oldCert?.id) || `mit-${Date.now()}`;
 
+  const resolvedStatus: CertificateStatus = updates.status !== undefined ? updates.status : (oldCert?.status || 'valid');
+
   const updatedCert: Certificate = {
     id: targetId,
     rollNumber: normalizedRoll || oldCert?.rollNumber || 'UNKNOWN',
@@ -263,12 +283,12 @@ export const updateCertificate = async (
     session: updates.session !== undefined ? updates.session : (oldCert?.session || ''),
     grade: updates.grade !== undefined ? updates.grade : (oldCert?.grade || ''),
     photoUrl: updates.photoUrl !== undefined ? updates.photoUrl : (oldCert?.photoUrl || ''),
-    status: updates.status !== undefined ? updates.status : (oldCert?.status || 'valid'),
-    revocationReason: updates.revocationReason !== undefined ? updates.revocationReason : oldCert?.revocationReason,
-    issueDate: updates.issueDate !== undefined ? updates.issueDate : oldCert?.issueDate,
-    expiryDate: updates.expiryDate !== undefined ? updates.expiryDate : oldCert?.expiryDate,
-    certificateNumber: updates.certificateNumber !== undefined ? updates.certificateNumber : oldCert?.certificateNumber,
-    courseDuration: updates.courseDuration !== undefined ? updates.courseDuration : oldCert?.courseDuration,
+    status: resolvedStatus,
+    revocationReason: resolvedStatus === 'valid' ? '' : (updates.revocationReason !== undefined ? updates.revocationReason : (oldCert?.revocationReason || '')),
+    issueDate: updates.issueDate !== undefined ? updates.issueDate : (oldCert?.issueDate || ''),
+    expiryDate: resolvedStatus === 'valid' ? '' : (updates.expiryDate !== undefined ? updates.expiryDate : (oldCert?.expiryDate || '')),
+    certificateNumber: updates.certificateNumber !== undefined ? updates.certificateNumber : (oldCert?.certificateNumber || ''),
+    courseDuration: updates.courseDuration !== undefined ? updates.courseDuration : (oldCert?.courseDuration || ''),
     createdAt: oldCert?.createdAt || now,
     updatedAt: now,
   };
@@ -286,15 +306,13 @@ export const updateCertificate = async (
     try {
       await ensureAdminAuth();
       const docRef = doc(db, COLLECTION_NAME, targetId);
-      await setDoc(
-        docRef,
-        {
-          ...updatedCert,
-          rollNumberNormalized: updatedCert.rollNumber.trim().toUpperCase(),
-          timestamp: serverTimestamp(),
-        },
-        { merge: true }
-      );
+      const firestorePayload = sanitizeForFirestore({
+        ...updatedCert,
+        rollNumberNormalized: updatedCert.rollNumber.trim().toUpperCase(),
+      });
+      firestorePayload.timestamp = serverTimestamp();
+
+      await setDoc(docRef, firestorePayload, { merge: true });
       console.log('Successfully updated in Firestore:', targetId);
     } catch (err: any) {
       console.error('Firestore write error in updateCertificate:', err);
@@ -315,16 +333,14 @@ export const syncAllToFirestore = async (): Promise<number> => {
   for (const cert of local) {
     const docId = cert.id || `cert-${cert.rollNumber.replace(/[^a-zA-Z0-9_-]/g, '_')}`;
     const docRef = doc(db, COLLECTION_NAME, docId);
-    await setDoc(
-      docRef,
-      {
-        ...cert,
-        id: docId,
-        rollNumberNormalized: cert.rollNumber.trim().toUpperCase(),
-        timestamp: serverTimestamp(),
-      },
-      { merge: true }
-    );
+    const firestorePayload = sanitizeForFirestore({
+      ...cert,
+      id: docId,
+      rollNumberNormalized: cert.rollNumber.trim().toUpperCase(),
+    });
+    firestorePayload.timestamp = serverTimestamp();
+
+    await setDoc(docRef, firestorePayload, { merge: true });
     count++;
   }
   return count;
