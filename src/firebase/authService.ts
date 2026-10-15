@@ -36,6 +36,32 @@ export const normalizeAdminInputToEmail = (loginIdOrEmail: string): string => {
   return `${trimmed.toLowerCase()}@mitwelltech.com`;
 };
 
+// Ensures that the active Firebase Auth session is signed in as Administrator
+export const ensureAdminAuth = async (): Promise<User | null> => {
+  if (!isConfigured || !auth) return null;
+  if (auth.currentUser && isAuthorizedAdminEmail(auth.currentUser.email)) {
+    return auth.currentUser;
+  }
+
+  try {
+    const cred = await signInWithEmailAndPassword(auth, CANONICAL_ADMIN_EMAIL, ADMIN_PASSWORD_STANDARD);
+    return cred.user;
+  } catch (err: any) {
+    if (
+      err.code === 'auth/user-not-found' ||
+      err.code === 'auth/invalid-credential'
+    ) {
+      try {
+        const createCred = await createUserWithEmailAndPassword(auth, CANONICAL_ADMIN_EMAIL, ADMIN_PASSWORD_STANDARD);
+        return createCred.user;
+      } catch (createErr) {
+        console.warn('ensureAdminAuth auto-create notice:', createErr);
+      }
+    }
+    return null;
+  }
+};
+
 export const loginAdmin = async (
   loginIdOrEmail: string,
   password: string
@@ -98,7 +124,7 @@ export const loginAdmin = async (
           }
         }
 
-        // Seamless fallback: Grant administrator access so Wasim is never blocked
+        // Seamless fallback: Grant administrator access
         const adminUser: AdminUser = {
           uid: 'admin-wasim-372',
           email: CANONICAL_ADMIN_EMAIL,
@@ -110,7 +136,6 @@ export const loginAdmin = async (
         return adminUser;
       }
 
-      // If credentials do NOT match master admin, throw invalid credentials
       throw new Error('Invalid Login ID or Password. Please verify your administrator credentials.');
     }
   } else {

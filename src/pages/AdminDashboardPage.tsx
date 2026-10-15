@@ -10,6 +10,7 @@ import {
   updateCertificate,
   deleteCertificate,
   updateCertificateStatus,
+  syncAllToFirestore,
   resetToMockData
 } from '../firebase/certificateService';
 import { getCurrentAdminUser } from '../firebase/authService';
@@ -236,7 +237,26 @@ export const AdminDashboardPage: React.FC = () => {
             </p>
           </div>
 
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center gap-2">
+            <button
+              onClick={async () => {
+                try {
+                  showToast('Syncing all certificates directly to Cloud Firestore...');
+                  const count = await syncAllToFirestore();
+                  await loadData();
+                  showToast(`Cloud Sync Complete: ${count} certificates saved to Firestore!`);
+                } catch (err: any) {
+                  console.error('Sync error:', err);
+                  alert(err.message || 'Failed to sync with Firestore');
+                }
+              }}
+              className="px-3.5 py-2 bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs uppercase tracking-wider rounded-md shadow-sm transition flex items-center gap-1.5"
+              title="Push and synchronize all certificates to Cloud Firestore database"
+            >
+              <Database size={15} />
+              <span>Sync All to Firestore</span>
+            </button>
+
             <button
               onClick={() => {
                 setCertificateToEdit(null);

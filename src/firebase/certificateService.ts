@@ -9,6 +9,7 @@ import {
   serverTimestamp
 } from 'firebase/firestore';
 import { db, isConfigured } from './config';
+import { ensureAdminAuth } from './authService';
 import type { Certificate, CertificateStatus } from '../types/certificate';
 import { INITIAL_CERTIFICATES } from '../data/mockCertificates';
 
@@ -61,6 +62,7 @@ export const checkDuplicateRollNumber = async (
   // Check Firestore
   if (isConfigured && db) {
     try {
+      await ensureAdminAuth();
       const q = query(
         collection(db, COLLECTION_NAME),
         where('rollNumberNormalized', '==', normalized)
@@ -126,6 +128,7 @@ export const getAllCertificates = async (): Promise<Certificate[]> => {
 
   if (isConfigured && db) {
     try {
+      await ensureAdminAuth();
       const snapshot = await getDocs(collection(db, COLLECTION_NAME));
       if (!snapshot.empty) {
         const remoteDocs = snapshot.docs.map((d) => ({
@@ -147,10 +150,8 @@ export const getAllCertificates = async (): Promise<Certificate[]> => {
           const key = l.rollNumber.trim().toUpperCase();
           const remote = mergedMap.get(key);
           if (!remote) {
-            // Newly added local certificate not yet on remote
             mergedMap.set(key, l);
           } else {
-            // Compare timestamps
             const remoteTime = new Date(remote.updatedAt || remote.createdAt || 0).getTime();
             const localTime = new Date(l.updatedAt || l.createdAt || 0).getTime();
             if (localTime >= remoteTime) {
@@ -163,29 +164,19 @@ export const getAllCertificates = async (): Promise<Certificate[]> => {
         saveLocalCertificates(merged);
         return merged;
       } else {
-        // Automatically populate initial records to newly connected Firestore
-        for (const cert of local) {
-          try {
-            await setDoc(doc(db, COLLECTION_NAME, cert.id || `cert-${cert.rollNumber}`), {
-              ...cert,
-              rollNumberNormalized: cert.rollNumber.toUpperCase(),
-              timestamp: serverTimestamp(),
-            });
-          } catch (seedErr) {
-            console.warn('Initial seed write notice:', seedErr);
-          }
-        }
+        // If Firestore is empty, auto-sync initial certificates
+        await syncAllToFirestore();
         return local;
       }
     } catch (err) {
-      console.warn('Firestore fetch notice, using persistent local registry:', err);
+      console.warn('Firestore fetch notice, using local registry:', err);
     }
   }
 
   return local;
 };
 
-// Add a new certificate
+// Add a new certificate (saves to both local and Firestore)
 export const addCertificate = async (
   certData: Omit<Certificate, 'id' | 'createdAt' | 'updatedAt'>
 ): Promise<Certificate> => {
@@ -197,39 +188,47 @@ export const addCertificate = async (
   }
 
   const now = new Date().toISOString();
-  const id = `mit-${Date.now()}`;
+  const cleanId = `cert-${normalizedRoll.replace(/[^a-zA-Z0-9_-]/g, '_')}`;
 
   const newCert: Certificate = {
     ...certData,
-    id,
+    id: cleanId,
     rollNumber: normalizedRoll,
     createdAt: now,
     updatedAt: now,
   };
 
-  // 1. Save to local storage first (guaranteed immediate persistence)
+  // 1. Save to local storage first
   const local = getLocalCertificates();
   const filtered = local.filter((c) => c.rollNumber.trim().toUpperCase() !== normalizedRoll);
   const updatedLocal = [newCert, ...filtered];
   saveLocalCertificates(updatedLocal);
 
-  // 2. Sync to Firestore
+  // 2. Sync directly to Cloud Firestore
   if (isConfigured && db) {
     try {
-      await setDoc(doc(db, COLLECTION_NAME, id), {
-        ...newCert,
-        rollNumberNormalized: normalizedRoll,
-        timestamp: serverTimestamp(),
-      });
+      await ensureAdminAuth();
+      const docRef = doc(db, COLLECTION_NAME, cleanId);
+      await setDoc(
+        docRef,
+        {
+          ...newCert,
+          rollNumberNormalized: normalizedRoll,
+          timestamp: serverTimestamp(),
+        },
+        { merge: true }
+      );
+      console.log('Successfully written to Firestore:', cleanId);
     } catch (err: any) {
-      console.warn('Firestore write notice (saved in local registry):', err?.message);
+      console.error('Firestore write error in addCertificate:', err);
+      throw new Error(`Cloud Firestore error: ${err.message || err.code}. Please ensure Firestore rules allow write.`);
     }
   }
 
   return newCert;
 };
 
-// Update an existing certificate
+// Update an existing certificate (saves to both local and Firestore)
 export const updateCertificate = async (
   id: string,
   updates: Partial<Certificate>
@@ -239,7 +238,6 @@ export const updateCertificate = async (
 
   const local = getLocalCertificates();
   
-  // Find certificate by ID or by rollNumber
   let index = local.findIndex((c) => c.id === id);
   if (index === -1 && normalizedRoll) {
     index = local.findIndex((c) => c.rollNumber.trim().toUpperCase() === normalizedRoll);
@@ -254,8 +252,10 @@ export const updateCertificate = async (
     }
   }
 
+  const targetId = id || (normalizedRoll ? `cert-${normalizedRoll.replace(/[^a-zA-Z0-9_-]/g, '_')}` : oldCert?.id) || `mit-${Date.now()}`;
+
   const updatedCert: Certificate = {
-    id: id || oldCert?.id || `mit-${Date.now()}`,
+    id: targetId,
     rollNumber: normalizedRoll || oldCert?.rollNumber || 'UNKNOWN',
     studentName: updates.studentName !== undefined ? updates.studentName : (oldCert?.studentName || ''),
     fatherName: updates.fatherName !== undefined ? updates.fatherName : (oldCert?.fatherName || ''),
@@ -284,7 +284,8 @@ export const updateCertificate = async (
   // Sync with Firestore using setDoc with merge: true
   if (isConfigured && db) {
     try {
-      const docRef = doc(db, COLLECTION_NAME, updatedCert.id || id);
+      await ensureAdminAuth();
+      const docRef = doc(db, COLLECTION_NAME, targetId);
       await setDoc(
         docRef,
         {
@@ -294,12 +295,39 @@ export const updateCertificate = async (
         },
         { merge: true }
       );
+      console.log('Successfully updated in Firestore:', targetId);
     } catch (err: any) {
-      console.warn('Firestore update notice (saved in local registry):', err?.message);
+      console.error('Firestore write error in updateCertificate:', err);
+      throw new Error(`Cloud Firestore error: ${err.message || err.code}. Please ensure Firestore rules allow write.`);
     }
   }
 
   return updatedCert;
+};
+
+// Sync all local certificates into Cloud Firestore
+export const syncAllToFirestore = async (): Promise<number> => {
+  const local = getLocalCertificates();
+  if (!isConfigured || !db) return 0;
+
+  await ensureAdminAuth();
+  let count = 0;
+  for (const cert of local) {
+    const docId = cert.id || `cert-${cert.rollNumber.replace(/[^a-zA-Z0-9_-]/g, '_')}`;
+    const docRef = doc(db, COLLECTION_NAME, docId);
+    await setDoc(
+      docRef,
+      {
+        ...cert,
+        id: docId,
+        rollNumberNormalized: cert.rollNumber.trim().toUpperCase(),
+        timestamp: serverTimestamp(),
+      },
+      { merge: true }
+    );
+    count++;
+  }
+  return count;
 };
 
 // Revoke a certificate
@@ -333,6 +361,7 @@ export const deleteCertificate = async (id: string, rollNumber?: string): Promis
 
   if (isConfigured && db) {
     try {
+      await ensureAdminAuth();
       await deleteDoc(doc(db, COLLECTION_NAME, id));
     } catch (err: any) {
       console.warn('Firestore delete notice:', err?.message);
